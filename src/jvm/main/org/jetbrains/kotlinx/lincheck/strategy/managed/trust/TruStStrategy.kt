@@ -13,9 +13,11 @@ package org.jetbrains.kotlinx.lincheck.strategy.managed.trust
 import java.util.*
 import kotlin.collections.HashMap
 
-internal class TruStStrategy(private val nThread: Int) {
-    private val mainGraphs: Queue<ExecutionGraph> = LinkedList()
-    private val newGraphs: Queue<ExecutionGraph> = LinkedList()
+typealias View = List<Int>
+
+internal class TruStStrategy(nThread: Int) {
+    private val mainGraphs: MutableList<ExecutionGraph> = LinkedList()
+    private val newGraphs: MutableList<ExecutionGraph> = LinkedList()
     init {
         mainGraphs.add(ExecutionGraph(nThread))
     }
@@ -41,6 +43,7 @@ internal class TruStStrategy(private val nThread: Int) {
         private val events: Array<MutableList<Event>> = Array(nThread) { mutableListOf() }
         private var timestamp: Int = 0
         private val prevEventsMap: MutableMap<Event, Event> = HashMap()
+        private val removedEvents: Array<MutableList<Event>> = Array(nThread) { mutableListOf() }
 
         constructor(other: ExecutionGraph) : this(other.nThread) {
             timestamp = other.timestamp
@@ -50,30 +53,70 @@ internal class TruStStrategy(private val nThread: Int) {
                     it.copy().also { copy -> prevEventsMap[it] = copy }
                 }.toMutableList()
             }
-        }
-
-        fun forwardRevisit(event: Event) {
-            val newGraph = ExecutionGraph(this)
-            val newEvent = event.copy()
-            newGraph.addEvent(newEvent)
-            newGraph.prevEventsMap[event] = newEvent
             for (iThread in 0 until nThread) {
-                newGraph.events[iThread].forEach { eventCur ->
+                events[iThread].forEach { eventCur ->
                     when (eventCur) {
                         is ReadEvent -> {
                             eventCur.readsFrom?.let { rf ->
-                                eventCur.readsFrom = newGraph.prevEventsMap[rf] as WriteEvent?
+                                eventCur.readsFrom = prevEventsMap[rf] as WriteEvent?
                             }
                         }
                         is WriteEvent -> {
                             eventCur.writesOn?.let { co ->
-                                eventCur.writesOn = newGraph.prevEventsMap[co] as WriteEvent?
+                                eventCur.writesOn = prevEventsMap[co] as WriteEvent?
                             }
                         }
                     }
                 }
             }
+        }
+
+        fun addRemovedEventsMaximally() {
+            // TODO: implement
+        }
+
+        fun cut(view: View): ExecutionGraph {
+            val newGraph = ExecutionGraph(this)
+            events.forEachIndexed { iThread, events ->
+                val viewIndex = view[iThread]
+                for (iEvent in viewIndex + 1 until events.size) {
+                    val event = events[iEvent]
+                    newGraph.removedEvents[iThread].add(event)
+                }
+                events.removeAll(newGraph.removedEvents[iThread])
+            }
+            return newGraph
+        }
+
+        fun forwardRevisit(event: Event): ExecutionGraph {
+            val newGraph = ExecutionGraph(this)
+            val newEvent = event.copy()
+            when (newEvent) {
+                is ReadEvent -> {
+                    newEvent.readsFrom = prevEventsMap[(event as ReadEvent).readsFrom!!] as WriteEvent?
+                }
+                is WriteEvent -> {
+                    newEvent.writesOn = prevEventsMap[(event as WriteEvent).writesOn!!] as WriteEvent?
+                }
+            }
+            newGraph.addEvent(newEvent)
+            newGraph.prevEventsMap[event] = newEvent
             newGraphs.add(newGraph)
+            return newGraph
+        }
+
+        fun checkForBackwardRevisits(iThread: Int) {
+            val writeEvent = events[iThread].last() as WriteEvent
+            val consistentReads = getConsistentSameLocationReads(writeEvent)
+            for (read in consistentReads) {
+                // TODO: is it correct?
+                val before = read.getBeforeView()
+                val writePoRf = writeEvent.getPoRfView()
+                val finalView = before.mapIndexed { i, v -> v.coerceAtLeast(writePoRf[i]) }
+                val newGraph = cut(finalView)
+                read.readsFrom = writeEvent
+                newGraph.addRemovedEventsMaximally()
+            }
         }
 
         fun addReadEvent(label: String, iThread: Int) {
@@ -96,10 +139,12 @@ internal class TruStStrategy(private val nThread: Int) {
             val co = consistentCOs.first()
             for (i in 1 until consistentCOs.size) {
                 event.writesOn = consistentCOs[i]
-                forwardRevisit(event)
+                val newGraph = forwardRevisit(event)
+                newGraph.checkForBackwardRevisits(iThread)
             }
             event.writesOn = co
             addEvent(event)
+            checkForBackwardRevisits(iThread)
         }
 
         private fun addEvent(event: Event) {
@@ -117,8 +162,29 @@ internal class TruStStrategy(private val nThread: Int) {
                 val events = events[iThread]
                 for (iEvent in 0 until events.size) {
                     val eventCur = events[iEvent]
+                    if (eventCur !is WriteEvent) {
+                        continue
+                    }
                     // TODO: check consistency
-                    if (eventCur is WriteEvent && eventCur.vectorClock.isLessOrEqual(event.vectorClock) && eventCur.label == event.label) {
+                    if (eventCur.vectorClock.isLessOrEqual(event.vectorClock) && eventCur.label == event.label) {
+                        result.add(eventCur)
+                    }
+                }
+            }
+            return result
+        }
+
+        private fun getConsistentSameLocationReads(event: Event): List<ReadEvent> {
+            val result = mutableListOf<ReadEvent>()
+            for (iThread in 0 until nThread) {
+                val events = events[iThread]
+                for (iEvent in 0 until events.size) {
+                    val eventCur = events[iEvent]
+                    if (eventCur !is ReadEvent) {
+                        continue
+                    }
+                    // TODO: check consistency
+                    if (event.vectorClock.isLessOrEqual(eventCur.vectorClock) && eventCur.label == event.label) {
                         result.add(eventCur)
                     }
                 }
@@ -136,11 +202,27 @@ internal class TruStStrategy(private val nThread: Int) {
 
             abstract fun copy(): Event
 
+            fun reset() = vectorClock.reset()
+
+            fun getPoRfView(): View {
+                // TODO: implement
+                return List(nThread) { 0 }
+            }
+
+            fun getBeforeView(): View {
+                // TODO: implement
+                return List(nThread) { 0 }
+            }
+
             inner class VectorClock(private val iThread: Int) {
                 private val vector: IntArray = IntArray(nThread)
 
                 fun update(other: VectorClock) = vector.indices.forEach { i ->
                     vector[i] = vector[i].coerceAtLeast(other.vector[i])
+                }
+
+                fun reset() = vector.indices.forEach { i ->
+                    vector[i] = 0
                 }
 
                 operator fun inc(): VectorClock {
@@ -158,8 +240,6 @@ internal class TruStStrategy(private val nThread: Int) {
                     }
                     return true
                 }
-
-                fun isLess(other: VectorClock): Boolean = isLessOrEqual(other) && !equals(other)
 
                 override fun equals(other: Any?): Boolean {
                     if (other !is VectorClock) {
@@ -200,7 +280,7 @@ internal class TruStStrategy(private val nThread: Int) {
             override fun copy(): ReadEvent {
                 val copy = ReadEvent(label, index, iThread)
                 copy.vectorClock = vectorClock.copy()
-                copy.readsFrom = readsFrom // FIXME
+                copy.readsFrom = readsFrom
                 return copy
             }
         }
@@ -215,7 +295,7 @@ internal class TruStStrategy(private val nThread: Int) {
             override fun copy(): WriteEvent {
                 val copy = WriteEvent(label, index, iThread)
                 copy.vectorClock = vectorClock.copy()
-                copy.writesOn = writesOn // FIXME
+                copy.writesOn = writesOn
                 return copy
             }
         }
