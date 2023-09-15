@@ -22,7 +22,7 @@ internal class TruStStrategy(nThread: Int) {
         mainGraphs.add(ExecutionGraph(nThread))
     }
 
-    fun addReadEvent(label: String, iThread: Int) {
+    fun addReadEvent(label: Long, iThread: Int) {
         mainGraphs.forEach { graph ->
             graph.addReadEvent(label, iThread)
         }
@@ -30,7 +30,7 @@ internal class TruStStrategy(nThread: Int) {
         newGraphs.clear()
     }
 
-    fun addWriteEvent(label: String, iThread: Int) {
+    fun addWriteEvent(label: Long, iThread: Int) {
         mainGraphs.forEach { graph ->
             graph.addWriteEvent(label, iThread)
         }
@@ -119,7 +119,7 @@ internal class TruStStrategy(nThread: Int) {
             }
         }
 
-        fun addReadEvent(label: String, iThread: Int) {
+        fun addReadEvent(label: Long, iThread: Int) {
             val index = events[iThread].size
             val event = ReadEvent(label, index, iThread)
             val consistentRFs = getConsistentSameLocationWrites(event)
@@ -132,7 +132,7 @@ internal class TruStStrategy(nThread: Int) {
             addEvent(event)
         }
 
-        fun addWriteEvent(label: String, iThread: Int) {
+        fun addWriteEvent(label: Long, iThread: Int) {
             val index = events[iThread].size
             val event = WriteEvent(label, index, iThread)
             val consistentCOs = getConsistentSameLocationWrites(event)
@@ -193,7 +193,7 @@ internal class TruStStrategy(nThread: Int) {
         }
 
         private abstract inner class Event(
-            val label: String,
+            val label: Long,
             val index: Int,
             val iThread: Int
         ) {
@@ -270,7 +270,7 @@ internal class TruStStrategy(nThread: Int) {
             }
         }
 
-        private inner class ReadEvent(label: String, index: Int, iThread: Int) : Event(label, index, iThread) {
+        private inner class ReadEvent(label: Long, index: Int, iThread: Int) : Event(label, index, iThread) {
             var readsFrom: WriteEvent? = null
                 set(value) {
                     (++vectorClock).update(++value!!.vectorClock)
@@ -285,7 +285,7 @@ internal class TruStStrategy(nThread: Int) {
             }
         }
 
-        private open inner class WriteEvent(label: String, index: Int, iThread: Int) : Event(label, index, iThread) {
+        private open inner class WriteEvent(label: Long, index: Int, iThread: Int) : Event(label, index, iThread) {
             var writesOn: WriteEvent? = null
                 set(value) {
                     (++vectorClock).update(++value!!.vectorClock)
@@ -300,7 +300,7 @@ internal class TruStStrategy(nThread: Int) {
             }
         }
 
-        private inner class InitEvent : WriteEvent("@Init", 0, 0) {
+        private inner class InitEvent : WriteEvent(-1, 0, 0) {
             override fun copy(): InitEvent {
                 val copy = InitEvent()
                 copy.vectorClock = vectorClock.copy()

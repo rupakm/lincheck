@@ -479,6 +479,10 @@ abstract class ManagedStrategy(
 
     // == LISTENING METHODS ==
 
+    internal fun captureSharedVariableIdentifier(objId: Int) {
+        // TODO: implement
+    }
+
     /**
      * This method is executed before a shared variable read operation.
      * @param iThread the number of the executed thread according to the [scenario][ExecutionScenario].

@@ -11,6 +11,7 @@ package org.jetbrains.kotlinx.lincheck.strategy.managed
 
 import org.jetbrains.kotlinx.lincheck.*
 import org.jetbrains.kotlinx.lincheck.TransformationClassLoader.*
+import org.jetbrains.kotlinx.lincheck.strategy.managed.SharedVariableIdentifier.*
 import org.objectweb.asm.*
 import org.objectweb.asm.Opcodes.*
 import org.objectweb.asm.Type
@@ -117,6 +118,7 @@ internal class ManagedStrategyTransformer(
                     val tracePointLocal = newTracePointLocal()
                     invokeBeforeSharedVariableRead(name, tracePointLocal)
                     super.visitFieldInsn(opcode, owner, name, desc)
+                    captureSharedVariableObject()
                     captureReadValue(desc, tracePointLocal)
                 }
                 GETFIELD -> {
@@ -137,11 +139,13 @@ internal class ManagedStrategyTransformer(
                     loadLocal(isLocalObject)
                     ifZCmp(GeneratorAdapter.GT, skipCodeLocationAfter)
                     // initialize ReadCodeLocation only if is not a local object
+                    captureSharedVariableObject()
                     captureReadValue(desc, tracePointLocal)
                     visitLabel(skipCodeLocationAfter)
                 }
                 PUTSTATIC -> {
                     beforeSharedVariableWrite(name, desc)
+                    captureSharedVariableObject()
                     super.visitFieldInsn(opcode, owner, name, desc)
                     invokeMakeStateRepresentation()
                 }
@@ -154,6 +158,7 @@ internal class ManagedStrategyTransformer(
                     ifZCmp(GeneratorAdapter.GT, skipCodeLocationBefore)
                     // add strategy invocation only if is not a local object
                     beforeSharedVariableWrite(name, desc)
+                    captureSharedVariableObject()
                     visitLabel(skipCodeLocationBefore)
 
                     super.visitFieldInsn(opcode, owner, name, desc)
@@ -189,6 +194,7 @@ internal class ManagedStrategyTransformer(
                     val skipCodeLocationAfter = newLabel()
                     loadLocal(isLocalObject)
                     ifZCmp(GeneratorAdapter.GT, skipCodeLocationAfter)
+                    captureSharedVariableObject()
                     captureReadValue(getArrayLoadType(opcode).descriptor, tracePointLocal)
                     visitLabel(skipCodeLocationAfter)
                 }
@@ -201,6 +207,7 @@ internal class ManagedStrategyTransformer(
                     ifZCmp(GeneratorAdapter.GT, skipCodeLocationBefore)
                     // add strategy invocation only if is not a local object
                     beforeSharedVariableWrite(null, getArrayStoreType(opcode).descriptor)
+                    captureSharedVariableObject()
                     visitLabel(skipCodeLocationBefore)
 
                     super.visitInsn(opcode)
@@ -299,6 +306,14 @@ internal class ManagedStrategyTransformer(
             LALOAD -> Type.LONG_TYPE
             DALOAD -> Type.DOUBLE_TYPE
             else -> throw IllegalStateException("Unexpected opcode: $opcode")
+        }
+
+        private fun captureSharedVariableObject() = adapter.run {
+            dup()
+            invokeStatic(SHARED_VARIABLE_IDENTIFIER_TYPE, GET_ID_METHOD)
+            loadStrategy()
+            swap()
+            invokeVirtual(MANAGED_STRATEGY_TYPE, CAPTURE_SHARED_VARIABLE_IDENTIFIER_METHOD)
         }
 
         private fun invokeBeforeSharedVariableRead(fieldName: String? = null, tracePointLocal: Int?) =
@@ -1300,8 +1315,11 @@ private val WAIT_TRACE_POINT_TYPE = Type.getType(WaitTracePoint::class.java)
 private val NOTIFY_TRACE_POINT_TYPE = Type.getType(NotifyTracePoint::class.java)
 private val PARK_TRACE_POINT_TYPE = Type.getType(ParkTracePoint::class.java)
 private val UNPARK_TRACE_POINT_TYPE = Type.getType(UnparkTracePoint::class.java)
+private val SHARED_VARIABLE_IDENTIFIER_TYPE = Type.getType(SharedVariableIdentifier::class.java)
 
 private val CURRENT_THREAD_NUMBER_METHOD = Method.getMethod(ManagedStrategy::currentThreadNumber.javaMethod)
+private val GET_ID_METHOD = Method.getMethod(SharedVariableIdentifier::getId.javaMethod)
+private val CAPTURE_SHARED_VARIABLE_IDENTIFIER_METHOD = Method.getMethod(ManagedStrategy::captureSharedVariableIdentifier.javaMethod)
 private val BEFORE_SHARED_VARIABLE_READ_METHOD = Method.getMethod(ManagedStrategy::beforeSharedVariableRead.javaMethod)
 private val BEFORE_SHARED_VARIABLE_WRITE_METHOD = Method.getMethod(ManagedStrategy::beforeSharedVariableWrite.javaMethod)
 private val BEFORE_LOCK_ACQUIRE_METHOD = Method.getMethod(ManagedStrategy::beforeLockAcquire.javaMethod)
